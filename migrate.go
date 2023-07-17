@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -61,11 +62,8 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 		}
 
 		m := migrations[migrationNumber]
-
 		m.Version = migrationNumber
-
-		migrationName := parts[1]
-		m.Name = migrationName
+		m.Name = parts[1]
 
 		// TODO: relative paths
 		migrationContent, err := os.ReadFile(path.Join(migrationsPath, filePath))
@@ -94,7 +92,6 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 		return err
 	}
 
-	// TODO: find diff between DB and file-defined migrations
 	const q = `
 		SELECT 
 		    *
@@ -133,43 +130,22 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 
 	var migrationErr error
 	for _, migration := range migrationsToApply {
-		tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-		if err != nil {
-			return err
-		}
+		txFunc := func(ctx context.Context, tx *sql.Tx) error {
+			if _, err = tql.Exec(ctx, tx, migration.UpScript); err != nil {
+				return err
+			}
 
-		if _, err = tql.Exec(ctx, tx, migration.UpScript); err != nil {
-			migrationErr = err
-			func() {
-				if err := tx.Rollback(); err != nil {
-					migrationErr = fmt.Errorf("failed to roll back transaction: %w", err)
-				}
-			}()
-			break
-		}
-
-		const stmt = `
+			const stmt = `
 			INSERT INTO
 				schema_migration (version, name)
 			VALUES 
 			    ($1, $2);`
-		if _, err = tql.Exec(ctx, tx, stmt, migration.Version, migration.Name); err != nil {
-			migrationErr = err
-			func() {
-				if err := tx.Rollback(); err != nil {
-					migrationErr = fmt.Errorf("failed to roll back transaction: %w", err)
-				}
-			}()
-			break
+			_, err = tql.Exec(ctx, tx, stmt, migration.Version, migration.Name)
+			return err
 		}
 
-		if err := tx.Commit(); err != nil {
-			migrationErr = err
-			func() {
-				if err := tx.Rollback(); err != nil {
-					migrationErr = fmt.Errorf("failed to roll back transaction: %w", err)
-				}
-			}()
+		txOpts := sql.TxOptions{Isolation: sql.LevelSerializable}
+		if migrationErr = tx(ctx, db, &txOpts, txFunc); migrationErr != nil {
 			break
 		}
 
@@ -178,8 +154,9 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 
 	if migrationErr != nil {
 		if err := revertState(ctx, db, newlyAppliedMigrations); err != nil {
-			return fmt.Errorf("%s: %w", err.Error(), migrationErr)
+			return errors.Join(err, migrationErr)
 		}
+
 		return migrationErr
 	}
 
@@ -190,55 +167,37 @@ func validateFoundMigrationFiles(migrations map[int]Migration) error {
 	var missingScriptsErr error
 	for _, migration := range migrations {
 		if migration.DownScript == "" {
-			return fmt.Errorf("failed to find 'down' script for %s", migration.Name)
+			missingScriptsErr = errors.Join(missingScriptsErr, fmt.Errorf("failed to find 'down' script for %s", migration.Name))
 		}
 
 		if migration.UpScript == "" {
-			return fmt.Errorf("failed to find 'up' script for %s", migration.Name)
+			missingScriptsErr = errors.Join(missingScriptsErr, fmt.Errorf("failed to find 'down' script for %s", migration.Name))
 		}
 	}
 	return missingScriptsErr
 }
 
 func revertState(ctx context.Context, db *sql.DB, appliedMigrations []Migration) error {
-	var rollbackErr error
+	var revertErr error
+
 	for i := len(appliedMigrations) - 1; i >= 0; i-- {
 		migration := appliedMigrations[i]
 
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
+		txFunc := func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.Exec(migration.DownScript); err != nil {
+				return err
+			}
+
+			_, err := tx.Exec("DELETE FROM schema_migration WHERE version = $1", migration.Version)
 			return err
 		}
 
-		if _, err = tx.Exec(migration.DownScript); err != nil {
-			func() {
-				if err := tx.Rollback(); err != nil {
-					rollbackErr = fmt.Errorf("failed to roll back transaction: %w", err)
-				}
-			}()
-			break
-		}
-
-		if _, err = tx.Exec("DELETE FROM schema_migration WHERE version = $1", migration.Version); err != nil {
-			func() {
-				if err := tx.Rollback(); err != nil {
-					rollbackErr = fmt.Errorf("failed to roll back transaction: %w", err)
-				}
-			}()
-			break
-		}
-
-		if err := tx.Commit(); err != nil {
-			func() {
-				if err := tx.Rollback(); err != nil {
-					rollbackErr = fmt.Errorf("failed to roll back transaction: %w", err)
-				}
-			}()
+		if revertErr = tx(ctx, db, nil, txFunc); revertErr != nil {
 			break
 		}
 	}
 
-	return rollbackErr
+	return revertErr
 }
 
 func ensureMigrationsSchema(ctx context.Context, db *sql.DB) error {

@@ -100,7 +100,7 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 		ORDER BY 
 		    version DESC
 		LIMIT 1;`
-	lastAppliedMigrationVersion, err := tql.QueryFirst[int](ctx, db, q)
+	lastAppliedMigrationVersion, err := tql.QueryFirstOrDefault[int](ctx, db, 0, q)
 	if err != nil {
 		return err
 	}

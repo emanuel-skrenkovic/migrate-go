@@ -94,19 +94,15 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 
 	const q = `
 		SELECT 
-		    *
+		    version
 		FROM 
 		    schema_migration
 		ORDER BY 
-		    version DESC;`
-	alreadyAppliedMigrations, err := tql.Query[Migration](ctx, db, q)
+		    version DESC
+		LIMIT 1;`
+	lastAppliedMigrationVersion, err := tql.QueryFirst[int](ctx, db, q)
 	if err != nil {
 		return err
-	}
-
-	lastAppliedMigrationVersion := 0
-	if len(alreadyAppliedMigrations) > 0 {
-		lastAppliedMigrationVersion = alreadyAppliedMigrations[0].Version
 	}
 
 	var migrationsToApply []Migration

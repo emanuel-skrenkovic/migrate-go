@@ -78,7 +78,7 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 		case "down":
 			m.DownScript = string(migrationContent)
 		default:
-			return fmt.Errorf("uncrecognized script type: %s", migrationScriptType)
+			return fmt.Errorf("uncrecognized script type: '%s'", migrationScriptType)
 		}
 
 		migrations[migrationNumber] = m
@@ -128,7 +128,7 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 	for _, migration := range migrationsToApply {
 		txFunc := func(ctx context.Context, tx *sql.Tx) error {
 			if _, err = tql.Exec(ctx, tx, migration.UpScript); err != nil {
-				return fmt.Errorf("failed running migration %s up script: %w", migration.Name, err)
+				return fmt.Errorf("failed running migration '%s' up script: %w", migration.Name, err)
 			}
 
 			const stmt = `
@@ -138,7 +138,7 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 			    ($1, $2);`
 			_, err = tql.Exec(ctx, tx, stmt, migration.Version, migration.Name)
 			if err != nil {
-				return fmt.Errorf("failed inserting migration %s into 'schema_migration': %w", migration.Name, err)
+				return fmt.Errorf("failed inserting migration '%s' into 'schema_migration': %w", migration.Name, err)
 			}
 			return nil
 		}
@@ -166,11 +166,11 @@ func validateFoundMigrationFiles(migrations map[int]Migration) error {
 	var missingScriptsErr error
 	for _, migration := range migrations {
 		if migration.DownScript == "" {
-			missingScriptsErr = errors.Join(missingScriptsErr, fmt.Errorf("failed to find 'down' script for %s", migration.Name))
+			missingScriptsErr = errors.Join(missingScriptsErr, fmt.Errorf("failed to find 'down' script for '%s'", migration.Name))
 		}
 
 		if migration.UpScript == "" {
-			missingScriptsErr = errors.Join(missingScriptsErr, fmt.Errorf("failed to find 'down' script for %s", migration.Name))
+			missingScriptsErr = errors.Join(missingScriptsErr, fmt.Errorf("failed to find 'down' script for '%s'", migration.Name))
 		}
 	}
 	return missingScriptsErr

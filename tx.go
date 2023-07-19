@@ -21,10 +21,12 @@ func tx(
 			return
 		}
 
-		err = errors.Join(fmt.Errorf("migrate-go panic: %v", p), err)
+		err = fmt.Errorf("migrate-go panic: %v", p)
 
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			err = errors.Join(rollbackErr, err)
+			if !errors.Is(rollbackErr, sql.ErrTxDone) {
+				err = errors.Join(rollbackErr, err)
+			}
 		}
 	}()
 
@@ -34,6 +36,10 @@ func tx(
 	}
 
 	if err = f(ctx, tx); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			err = errors.Join(err, rollbackErr)
 		}

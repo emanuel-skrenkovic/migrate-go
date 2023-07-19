@@ -102,7 +102,7 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 		LIMIT 1;`
 	lastAppliedMigrationVersion, err := tql.QueryFirstOrDefault[int](ctx, db, 0, q)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed fetching last applied version: %w", err)
 	}
 
 	var migrationsToApply []Migration
@@ -128,7 +128,7 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 	for _, migration := range migrationsToApply {
 		txFunc := func(ctx context.Context, tx *sql.Tx) error {
 			if _, err = tql.Exec(ctx, tx, migration.UpScript); err != nil {
-				return err
+				return fmt.Errorf("failed running migration %s up script: %w", migration.Name, err)
 			}
 
 			const stmt = `
@@ -137,7 +137,10 @@ func Run(ctx context.Context, db *sql.DB, migrationsPath string) error {
 			VALUES 
 			    ($1, $2);`
 			_, err = tql.Exec(ctx, tx, stmt, migration.Version, migration.Name)
-			return err
+			if err != nil {
+				return fmt.Errorf("failed inserting migration %s into 'schema_migration': %w", migration.Name, err)
+			}
+			return nil
 		}
 
 		txOpts := sql.TxOptions{Isolation: sql.LevelSerializable}
@@ -207,7 +210,7 @@ func ensureMigrationsSchema(ctx context.Context, db *sql.DB) error {
 
 	schemas, err := tql.QueryFirst[int](ctx, db, checkIfSchemaExistsQuery, "schema_migration")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed fetching if 'schema_migration' table exists: %w", err)
 	}
 
 	if schemas > 0 {
@@ -222,5 +225,9 @@ func ensureMigrationsSchema(ctx context.Context, db *sql.DB) error {
 		)`
 
 	_, err = tql.Exec(ctx, db, stmt)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed creating 'schema_migration' table: %w", err)
+	}
+
+	return nil
 }

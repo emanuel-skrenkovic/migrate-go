@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eskrenkovic/tql"
+	"github.com/emanuel-skrenkovic/tql"
 )
 
 type Migration struct {
